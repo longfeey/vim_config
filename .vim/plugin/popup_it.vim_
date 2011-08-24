@@ -1,0 +1,303 @@
+"    Author:  Fvw (vimtexhappy@gmail.com)
+"             Auto complete popup plugin
+"   Version:  v01.04
+"   Created:  2008-04-10
+"   License:  Copyright (c) 2001-2009, Fvw
+"             GNU General Public License version 2 for more details.
+"     Usage:  Put this file in your VIM plugins dir
+"             Add usr type:
+"             let g:usrPopup= {}
+"             let s:usrPopup["type"] = [
+"                         \ {'cmd'     : "\<c-n>",
+"                         \  'pattern' : ['xx', 'yy'],
+"                         \  'exclude' : ['zz'],
+"                         \ },
+"                         \{item2}
+"                         \{item3}
+"                         \]
+"             if already exists deftype, the item than usrtype didn't
+"             have would be append.
+"             "*" type would be append to every type.
+"
+"             Use :PopupType type change now popupType
+"popup_it.vim: {{{1
+if v:version < 700 || exists("loaded_popup_it")
+    finish
+endif
+let loaded_popup_it= 1
+
+let s:keys    = [
+            \ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k',
+            \ 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+            \ 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G',
+            \ 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R',
+            \ 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2',
+            \ '3', '4', '5', '6', '7', '8', '9', '-', '_', '~', '^',
+            \ '.', ',', ':', '!', '#', '=', '%', '$', '@', '<', '>',
+            \ '/', '\']
+
+autocmd BufEnter,BufRead * call <SID>PopupRun()
+autocmd FileType * call <SID>PopupRun()
+amenu <silent> &Popup.Run :call <SID>PopupRun()<CR>
+amenu <silent> &Popup.Clr :call <SID>PopupClr()<CR>
+
+command PopupRun call <SID>PopupRun()
+command PopupClr call <SID>PopupClr()
+
+command -nargs=? -complete=customlist,CplPopupType PopupType call <SID>SetPopupType(<q-args>)
+
+"GetSid {{{1
+fun! s:GetSid()
+    return matchstr(expand('<sfile>'), '<SNR>\d\+_')
+endfun
+
+"PopupClr: {{{1
+fun! s:PopupClr()
+    let s:AllPopup  = {}
+    let b:NowPopup  = []
+    let b:pumTips = ''
+    let b:lastFail  = {}
+    "idx == 0  -> no fail
+    call s:UpdateLastFail(0)
+    for key in s:keys
+        if maparg(key, 'i') =~ 'PopupChk'
+            exec "silent! iunmap <buffer> ".key
+        endif
+    endfor
+    silent! iunmap <buffer> <c-x><c-o>
+    silent! iunmap <buffer> <c-n>
+    silent! iunmap <buffer> <c-p>
+    silent! iunmap <buffer> <c-b>
+    silent! iunmap <buffer> <Plug>PopupFix
+    silent! nunmap <buffer> i
+    silent! nunmap <buffer> a
+    exec "silent! aunmenu &Popup.Type"
+endfun
+
+"PopupRun: {{{1
+fun! s:PopupRun()
+    call s:PopupClr()
+    call s:MakeAllPopup()
+    cal  s:SetPopupType(&ft)
+
+    if has("autocmd") && exists("+omnifunc")
+        if &omnifunc == ""
+            setlocal omnifunc=syntaxcomplete#Complete
+        endif
+    endif
+    silent! inoremap <silent> <buffer> <expr> <c-x><c-o>
+                \ (pumvisible()?'<c-y>':'').
+                \ '<c-x><c-o><c-r>=<SID>PopupFix("OmniTips")<cr>'
+    silent! inoremap <silent> <buffer> <expr> <c-n>
+                \ (pumvisible()?'<c-n>':
+                \ '<c-n><c-r>=<SID>PopupFix("CtrlNTips")<cr>')
+    silent! inoremap <silent> <buffer> <expr> <c-b>
+                \ (pumvisible()?'<c-y>':'').
+                \ '<c-n><c-r>=<SID>PopupFix("CtrlNTips")<cr>'
+
+    "use \<c-r> insert fix char
+    inoremap <silent> <buffer> <Plug>PopupFix <c-r>=<SID>PopupFix()<cr>
+
+    for key in s:keys
+        if maparg(key, 'i') == ""
+            exec "silent! inoremap <silent> <buffer> ".key." ".key.
+                        \ "\<c-r>=\<SID>PopupChk()\<cr>"
+        endif
+    endfor
+    nnoremap <silent> <buffer> i i<c-r>=<SID>PopupChk()<cr>
+    nnoremap <silent> <buffer> a a<c-r>=<SID>PopupChk()<cr>
+endfun
+
+"PopupFix: {{{1
+fun! s:PopupFix(...)
+    "Don't use feedkeys , because if the complete
+    "very slow the feedkeys would add key after
+    "some use input
+    if !pumvisible()
+        let b:pumTips = ""
+        return "\<c-e>"
+    else
+        "clean
+        call s:UpdateLastFail(0)
+        if a:0 == 1
+            let b:pumTips = a:1
+        endif
+        return "\<c-p>\<down>"
+    endif
+endfun
+
+
+"PopupChk: {{{1
+fun! s:PopupChk()
+    "ignore
+    if &paste
+        return ""
+    end
+    "skip some pumvisible tips
+    "SnipTips" "SelTips" for snip plugin tab_it.vim
+    if pumvisible() && (b:pumTips == "SnipTips"
+                \ ||b:pumTips == "SelTips"
+                \ ||b:pumTips == "CtrlNTips"
+                \ ||b:pumTips == "CtrlPTips"
+                \ ||b:pumTips == "OmniTips"
+                \)
+        return ""
+    endif
+
+    let lStr = getline('.')[:col('.')-2]
+    let i = 0
+    for cpl in b:NowPopup
+        let i += 1
+        if s:IsMatch(lStr, cpl.pattern)  && (!has_key(cpl,'exclude') || !s:IsMatch(lStr, cpl.exclude))
+            if (pumvisible() && b:pumTips == "AutoTips".i)
+                "This match already pumvisible
+                return ""
+            endif
+            if s:IsLastFail(i)
+                "Update
+                call s:UpdateLastFail(i)
+                return ""
+            endif
+            if pumvisible()
+                call feedkeys("\<c-e>", 'n')
+            endif
+            if cpl.cmd == "\<c-n>" || cpl.cmd == "\<c-x>\<c-o>"
+                call feedkeys(cpl.cmd, 'n')
+            else
+                "<C-R>= can't remap use feedkeys can remap
+                call feedkeys(cpl.cmd, 'm')
+            end
+            let b:pumTips = "AutoTips".i
+            "Set first , Clear in PopupFix if pum ok"
+            call s:UpdateLastFail(i)
+            "Use plug for silent
+            call feedkeys("\<Plug>PopupFix", 'm')
+            return ""
+        endif
+    endfor
+    return ""
+endfun
+fun! s:IsMatch(str, list)
+    for val in a:list
+        if val != "" && a:str =~ '\m\C'.val.'$'
+            return 1
+        endif
+    endfor
+    return 0
+endfun
+fun! s:UpdateLastFail(idx)
+    let b:lastFail['col'] = col('.')
+    let b:lastFail['idx'] = a:idx
+endfun
+fun! s:IsLastFail(idx)
+    if col('.') - b:lastFail['col'] == 1
+                \ && b:lastFail['idx'] == a:idx
+        return 1
+    endif
+    return 0
+endfun
+
+"ExtendType: {{{1
+fun! s:ExtendType(list1, list2)
+    for item in a:list2
+        if !s:has_cmd(a:list1, item)
+            call add(a:list1, deepcopy(item))
+        endif
+    endfor
+endfun
+fun! s:has_cmd(list, chk)
+    for item in a:list
+        if item.cmd == a:chk.cmd
+            return 1
+        endif
+    endfor
+    return 0
+endfun
+
+"MakeAllPopup: {{{1
+fun! s:MakeAllPopup()
+    let s:AllPopup = {}
+    if exists("g:usrPopup") && type(g:usrPopup) ==  type({})
+        let s:AllPopup = deepcopy(g:usrPopup)
+        for type in keys(s:defPopup)
+            if !has_key(s:AllPopup, type)
+                let s:AllPopup[type] = deepcopy(s:defPopup[type])
+            else
+                call s:ExtendType(s:AllPopup[type], s:defPopup[type])
+            endif
+        endfor
+    else
+        let s:AllPopup = deepcopy(s:defPopup)
+    endif
+
+    exec "silent! aunmenu &Popup.Type"
+    for type in keys(s:AllPopup)
+        silent exec 'amenu <silent> &Popup.Type.'.escape(type, '.').
+                    \ " :call \<SID>SetPopupType('".type."')\<CR>"
+    endfor
+endfun
+
+"SetPopupType: {{{1
+fun! s:SetPopupType(...)
+    let type = a:0 > 0 ? a:1 : &ft
+    let b:NowPopup = []
+    if has_key(s:AllPopup, type)
+        let b:NowPopup = deepcopy(s:AllPopup[type])
+    endif
+    if type != '*' && has_key(s:AllPopup, "*")
+        call s:ExtendType(b:NowPopup, s:AllPopup['*'])
+    endif
+endfun
+fun! CplPopupType(A,L,P)
+    return keys(s:AllPopup)
+endfun
+
+"def Popup: {{{1
+let s:defPopup = {}
+let s:defPopup["*"] = [
+            \ {'cmd'     : "\<c-x>\<c-f>",
+            \  'pattern' : ['/\f\{1,}'],
+            \ },
+            \ {'cmd'     : "\<c-n>",
+            \  'pattern' : ['\k\@<!\k\{3,20}'],
+            \ },
+            \]
+let s:defPopup["c"] = [
+            \ {'cmd'     : "\<c-x>\<c-o>",
+            \  'pattern' : ['\k\.','\k->'],
+            \ },
+            \]
+let s:defPopup["c.gtk"] = [
+            \ {'cmd'     : "\<c-x>\<c-o>",
+            \  'pattern' : ['\k\.\k{0,20}','\k->\k{0,20}',
+            \               'gtk_\k\{2,20}','GTK_\k\{1,20}','Gtk\k\{1,20}',
+            \               'gdk_\k\{2,20}','GDK_\k\{1,20}','Gdk\k\{1,20}',
+            \               'g_\k\{2,20}', 'G_\k\{1,20}'],
+            \ },
+            \]
+let s:defPopup["tex"] = [
+            \ {'cmd'     : "\<c-n>",
+            \  'pattern' : ['\\\k\{3,20}','\([\|{\)\k\{3,20}'],
+            \ },
+            \]
+let s:defPopup["html"] = [
+            \ {'cmd'     : "\<c-x>\<c-o>",
+            \  'pattern' : ['&','<','</',
+            \               '<.*\s\+\k\{3,20}','<.*\k\+\s*="\k\{3,20}'],
+            \ },
+            \]
+let s:defPopup["css"] = [
+            \ {'cmd'     : "\<c-n>",
+            \  'pattern' : ['\k\@<!\k\{3,20}'],
+            \  'exclude' : ['^\s.*'],
+            \ },
+            \ {'cmd'     : "\<c-x>\<c-o>",
+            \  'pattern' : ['^\s.*\(\k\|-\)\@<!\(\k\|-\)\{2,20}'],
+            \ },
+            \]
+let s:defPopup["javascript"] = [
+            \ {'cmd'     : "\<c-x>\<c-o>",
+            \  'pattern' : ['\k\.\k\{0,20}'],
+            \ },
+            \]
+" vim: set ft=vim ff=unix fdm=marker :
